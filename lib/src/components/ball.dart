@@ -1,92 +1,142 @@
+// ball.dart
+import 'dart:math' as math;
 import 'package:flame/collisions.dart';
 import 'package:flame/components.dart';
 import 'package:flame/effects.dart';
 import 'package:flutter/material.dart';
 
-
 import '../brick_breaker.dart';
+import '../config.dart';
 import 'bat.dart';
 import 'brick.dart';
 import 'play_area.dart';
 
-class Ball extends SpriteComponent
+class Ball extends CircleComponent
     with CollisionCallbacks, HasGameReference<BrickBreaker> {
   Ball({
-  required this.velocity,
-  required super.position,
-  required double radius,
-  required this.difficultyModifier,
-}) : super(
-        size: Vector2(radius * 2, radius * 2), // Use size instead of radius
-        anchor: Anchor.center,
-        paint: Paint()
-          ..color = const Color(0xff1e6091)
-          ..style = PaintingStyle.fill,
-        children: [CircleHitbox()],
-      );
+    required this.velocity,
+    required super.position,
+    required double radius,
+    required this.difficultyModifier,
+  }) : super(
+          radius: radius,
+          anchor: Anchor.center,
+          paint: Paint()
+            ..color = const Color(0xff1e6091)
+            ..style = PaintingStyle.fill,
+          children: [CircleHitbox()],
+        );
 
-  Vector2 velocity;
+  final Vector2 velocity;
   final double difficultyModifier;
-
-  @override
-  Future<void> onLoad() async {
-    super.onLoad();
-    // Load the image and set it as the sprite
-    sprite = await Sprite.load('ball.png'); // Ensure this path is correct
-  }
+  bool _isLaunched = false;
+  bool get isLaunched => _isLaunched;
 
   @override
   void update(double dt) {
     super.update(dt);
 
-    // Dynamically adjust velocity based on the score
-    final double speedMultiplier = 1 + (game.score.value / 10);
-    const double maxSpeed = 800; // Use const instead of final
-    velocity = velocity.normalized() * (velocity.length * speedMultiplier).clamp(200, maxSpeed);
+    if (_isLaunched) {
+      position += velocity * dt;
+    } else {
+      // Follow bat position if not launched
+      final bat = game.world.children.query<Bat>().firstOrNull;
+      if (bat != null) {
+        position.x = bat.position.x;
+        position.y = game.height * 0.85;
+      }
+    }
+  }
 
-    // Update position
-    position += velocity * dt;
+  void launch() {
+    if (!_isLaunched) {
+      _isLaunched = true;
+      // Set initial velocity upward with slight angle
+      final angle = (game.rand.nextDouble() - 0.5) * 1.5;
+      final speed = game.height * 0.5;
+      velocity.setValues(
+        speed * math.sin(angle),
+        -speed * math.cos(angle),
+      );
+    }
+  }
+
+  void reset() {
+    _isLaunched = false;
+    velocity.setZero();
+    final bat = game.world.children.query<Bat>().firstOrNull;
+    if (bat != null) {
+      position.x = bat.position.x;
+      position.y = game.height * 0.85;
+    }
   }
 
   @override
   void onCollisionStart(
-      Set<Vector2> intersectionPoints, PositionComponent other) {
+    Set<Vector2> intersectionPoints,
+    PositionComponent other,
+  ) {
     super.onCollisionStart(intersectionPoints, other);
-
-
 
     if (other is PlayArea) {
       if (intersectionPoints.first.y <= 0) {
         velocity.y = -velocity.y;
-        game.playCollisionSound('jump.wav');
+        _playCollisionSound('jump.wav');
       } else if (intersectionPoints.first.x <= 0) {
         velocity.x = -velocity.x;
-        game.playCollisionSound('jump.wav');
+        _playCollisionSound('jump.wav');
       } else if (intersectionPoints.first.x >= game.width) {
         velocity.x = -velocity.x;
-        game.playCollisionSound('jump.wav');
+        _playCollisionSound('jump.wav');
       } else if (intersectionPoints.first.y >= game.height) {
-        add(RemoveEffect(
-          delay: 0.35,
-          onComplete: () {
-            game.playState = PlayState.gameOver;
-            game.playCollisionSound('explosion.wav');
-          },
-        ));
+        // Ball hit the bottom - lose a life
+        game.lives.value--;
+        if (game.lives.value <= 0) {
+          add(RemoveEffect(
+            delay: 0.35,
+            onComplete: () {
+              game.playState = PlayState.gameOver;
+            },
+          ));
+        } else {
+          removeFromParent();
+          game.world.add(Ball(
+            difficultyModifier: difficultyModifier,
+            radius: ballRadius,
+            position: Vector2(game.width / 2, game.height * 0.85),
+            velocity: Vector2.zero(),
+          ));
+        }
       }
-    } else if (other is Bat) {
-      velocity.y = -velocity.y;
-      velocity.x += (position.x - other.position.x) / other.size.x * game.width * 0.3;
-      game.playCollisionSound('jump.wav');
-} else if (other is Brick) {
-  Vector2 delta = position - other.position;
-  if (delta.x.abs() > delta.y.abs()) {
-    velocity.x = -velocity.x;
-  } else {
-    velocity.y = -velocity.y;
+    } else if (other is Bat && _isLaunched) {
+      velocity.y = -velocity.y.abs();
+      velocity.x =
+          (position.x - other.position.x) / other.size.x * game.width * 0.5;
+      _playCollisionSound('jump.wav');
+    } else if (other is Brick) {
+      final brickCenter = other.position.clone();
+      final ballCenter = position.clone();
+      final collisionVector = ballCenter - brickCenter;
+
+      if (collisionVector.y.abs() > collisionVector.x.abs()) {
+        velocity.y = -velocity.y;
+      } else {
+        velocity.x = -velocity.x;
+      }
+
+      velocity.setFrom(velocity * difficultyModifier);
+      _playCollisionSound('explosion.wav');
+    }
   }
-  game.playCollisionSound('explosion.wav');
-  velocity.setFrom(velocity * difficultyModifier);
-}
+
+  // Add this helper method to handle sound effects with a small delay
+  DateTime _lastSoundTime = DateTime.now();
+  void _playCollisionSound(String soundFile) {
+    final now = DateTime.now();
+    // Add a small delay between sound effects to prevent overlapping
+    if (now.difference(_lastSoundTime).inMilliseconds > 50) {
+      game.audioManager.playSfx(soundFile);
+      _lastSoundTime = now;
+    }
   }
 }
