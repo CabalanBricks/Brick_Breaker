@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flame/collisions.dart';
 import 'package:flame/components.dart';
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import '../brick_breaker.dart';
 import '../config.dart';
 import 'ball.dart';
 import 'bat.dart';
+import 'power_up_ball.dart';
 
 class Brick extends RectangleComponent
     with CollisionCallbacks, HasGameReference<BrickBreaker> {
@@ -14,7 +16,7 @@ class Brick extends RectangleComponent
           size: Vector2(brickWidth, brickHeight),
           anchor: Anchor.center,
           paint: Paint()
-            ..color = color // Use the provided color
+            ..color = color
             ..style = PaintingStyle.fill,
           children: [RectangleHitbox()],
         );
@@ -23,13 +25,24 @@ class Brick extends RectangleComponent
   void onCollisionStart(
       Set<Vector2> intersectionPoints, PositionComponent other) {
     super.onCollisionStart(intersectionPoints, other);
-    removeFromParent();
-    game.score.value++; // Increment score when a brick is hit
 
-    if (game.world.children.query<Brick>().length == 1) {
+    // 10% chance to spawn a power-up
+    if (Random().nextDouble() < 0.1) {
+      final powerUp = PowerUpBall(
+        position: position.clone(),
+        velocity: Vector2(0, game.height * 0.3), // Move downward
+      );
+      game.world.add(powerUp);
+    }
+
+    removeFromParent();
+    game.score.value++;
+
+    final remainingBricks = game.world.children.whereType<Brick>().length;
+    if (remainingBricks == 1) {
       game.playState = PlayState.won;
-      game.world.removeAll(game.world.children.query<Ball>());
-      game.world.removeAll(game.world.children.query<Bat>());
+      game.world.removeAll(game.world.children.whereType<Ball>());
+      game.world.removeAll(game.world.children.whereType<Bat>());
     }
   }
 }
